@@ -118,6 +118,8 @@ function dec(s){var t=document.createElement('textarea');t.innerHTML=s||'';retur
 function txt(n){return (n&&n.textContent||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
 function getJ(path){return fetch(API+path,{credentials:'omit'}).then(function(r){if(!r.ok){throw new Error(r.status);}return r.json();});}
 function okUrl(u){return /^https?:\/\//i.test(u||'');}
+/* "10-21" -> "Ages 10-21"; text that already says what it is ("Grades K-5", "All ages", "Teens") is left alone */
+function agesTxt(a){a=String(a||'').trim();if(/^(pre-?)?k\s*[-–]/i.test(a)){return 'Grades '+a;}return /^[\d\s\-–+]/.test(a)?'Ages '+a:a;}
 function host(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return u;}}
 
 /* ---- read what the page already shows ---- */
@@ -187,7 +189,7 @@ function build(d){
   if(orgName){h+='<p class="kcp-org">Offered by <b>'+esc(orgName)+'</b></p>';}
   var tags='';
   if(cost){tags+='<span class="kcp-tag'+(cost==='Free'?' free':'')+'">'+svg('cost')+esc(cost)+'</span>';}
-  if(ages){tags+='<span class="kcp-tag">'+svg('ages')+'Ages '+esc(ages)+'</span>';}
+  if(ages){tags+='<span class="kcp-tag">'+svg('ages')+esc(agesTxt(ages))+'</span>';}
   if(areaN){tags+='<span class="kcp-tag">'+svg('area')+esc(areaN)+'</span>';}
   if(tags){h+='<div class="kcp-tags">'+tags+'</div>';}
   h+='</header>';
@@ -235,7 +237,7 @@ function miniCard(p,typeById,freeId,orgById){
   var tid=(p['program-type']||[]).filter(function(t){return typeById[t];})[0];
   var t=typeById[tid], L=t?(LOOK[t.slug]||OTHER):OTHER;
   var g='', f=fee(p,freeId); if(f){g+='<span'+(f==='Free'?' class="free"':'')+'>'+esc(f)+'</span>';}
-  if(p.kc_prog_ages){g+='<span>Ages '+esc(p.kc_prog_ages)+'</span>';}
+  if(p.kc_prog_ages){g+='<span>'+esc(agesTxt(p.kc_prog_ages))+'</span>';}
   var o=(p.organization||[])[0];
   return '<a class="kcp-mc" style="--tc:'+L.c+'" href="'+esc(p.link)+'">'+(t?'<span class="t">'+esc(L.n||dec(t.name))+'</span>':'')+
     '<h3>'+esc(dec(p.title.rendered))+'</h3>'+(o&&orgById[o]?'<span class="o">'+esc(orgById[o])+'</span>':'')+(g?'<span class="g">'+g+'</span>':'')+'</a>';
