@@ -164,6 +164,7 @@ function build(d){
   var orgName=org?dec(org.name):src.aboutName;
   var cost=fee(p,d.freeId)||(first(src.rows,'Fees')||{}).t||'';
   if(/^\$0\b/.test(cost)){cost='Free';}
+  if(!/[0-9a-z]/i.test(cost)){cost='';}
   var ages=p.kc_prog_ages||(first(src.rows,'Ages')||{}).t||'';
   var web=okUrl(p.kc_prog_web)?p.kc_prog_web:((first(src.rows,'Website')||{}).a||{}).href||'';
   var addrLines=(src.rows.Address||[]).map(function(r){return r.t.replace(/\s*,\s*$/,'').replace(/\s+,/g,',');}).filter(Boolean);
@@ -212,13 +213,15 @@ function build(d){
   if(ages){row('ages','Ages',esc(ages));}
   if(addrLines.length||areaN){
     var a=addrLines.length?esc(addrLines.join(', ')):esc(areaN);
-    if(areaN&&addrLines.length&&!street){a+=' <small>'+esc(areaN)+'</small>';}
+    var plain=function(s){return String(s).normalize('NFD').replace(/[̀-ͯʻ’'`]/g,'').toLowerCase();};
+    if(areaN&&addrLines.length&&!street&&plain(addrLines.join(' ')).indexOf(plain(region.name))===-1){a+=' <small>'+esc(areaN)+'</small>';}
     if(street){a+='<small><a href="https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(addrLines.join(', ')+', Kauai, HI')+'" target="_blank" rel="noopener">Get directions</a></small>';}
     row('area','Where',a);
   }
   if(contact){row('person','Contact',esc(contact));}
   if(phone){row('phone','Phone','<a href="tel:'+esc(phone.replace(/[^\d+]/g,''))+'">'+esc(phone)+'</a>');}
-  if(email&&/@/.test(email)){row('mail','Email','<a href="mailto:'+esc(email)+'">'+esc(email)+'</a>');}
+  var mails=email.split(/\s*(?:,|;|\bor\b|\band\b|\s)\s*/i).filter(function(m){return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(m);});
+  if(mails.length){row('mail','Email',mails.map(function(m){return '<a href="mailto:'+esc(m)+'">'+esc(m)+'</a>';}).join('<br>'));}
   if(web){row('web','Website','<a href="'+esc(web)+'" target="_blank" rel="noopener">'+esc(host(web))+'</a>');}
   h+='</dl>';
   h+='<p class="kcp-fix">Something out of date? <a href="/contact/">Let us know</a> and we’ll fix it.</p>';
