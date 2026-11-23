@@ -116,7 +116,34 @@ function svg(k){return '<svg viewBox="0 0 24 24" aria-hidden="true">'+I[k]+'</sv
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function dec(s){var t=document.createElement('textarea');t.innerHTML=s||'';return t.value;}
 function txt(n){return (n&&n.textContent||'').replace(/ /g,' ').replace(/\s+/g,' ').trim();}
-function getJ(path){return fetch(API+path,{credentials:'omit'}).then(function(r){if(!r.ok){throw new Error(r.status);}return r.json();});}
+/* one retry when the site says "too many requests" (429) or hiccups */
+function getJ(path,tries){
+  tries=tries==null?1:tries;
+  return fetch(API+path,{credentials:'omit'}).then(function(r){
+    if(!r.ok){
+      if(tries>0&&(r.status===429||r.status>=500)){return new Promise(function(ok){setTimeout(ok,1200);}).then(function(){return getJ(path,tries-1);});}
+      throw new Error(r.status);
+    }
+    return r.json();
+  });
+}
+/* Everything the page needs, in ONE round of 5 requests, kept for 15 minutes in this browser tab
+   so clicking from program to program needs no new requests. */
+var CACHE_KEY='kcp-data-v1', CACHE_MS=15*60*1000;
+function loadAll(){
+  try{var c=JSON.parse(sessionStorage.getItem(CACHE_KEY)||'null');if(c&&Date.now()-c.t<CACHE_MS&&c.d&&c.d.progs){return Promise.resolve(c.d);}}catch(e){}
+  return Promise.all([
+    getJ('keiki-program?per_page=100&_fields=id,link,title,organization,program-type,keiki-region,free-program,kc_prog_fee,kc_prog_freq,kc_prog_ages,kc_prog_web'),
+    getJ('program-type?per_page=100&_fields=id,slug,name'),
+    getJ('organization?per_page=100&_fields=id,name,z_taxonomy_image_url').catch(function(){return [];}),
+    getJ('keiki-region?per_page=100&_fields=id,name').catch(function(){return [];}),
+    getJ('free-program?per_page=100&_fields=id,slug').catch(function(){return [];})
+  ]).then(function(r){
+    var d={progs:r[0],types:r[1],orgs:r[2],regions:r[3],free:r[4]};
+    try{sessionStorage.setItem(CACHE_KEY,JSON.stringify({t:Date.now(),d:d}));}catch(e){}
+    return d;
+  });
+}
 function okUrl(u){return /^https?:\/\//i.test(u||'');}
 /* "10-21" -> "Ages 10-21"; text that already says what it is ("Grades K-5", "All ages", "Teens") is left alone */
 function agesTxt(a){a=String(a||'').trim();if(/^(pre-?)?k\s*[-–]/i.test(a)){return 'Grades '+a;}return /^[\d\s\-–+]/.test(a)?'Ages '+a:a;}
@@ -243,18 +270,13 @@ function miniCard(p,typeById,freeId,orgById){
     '<h3>'+esc(dec(p.title.rendered))+'</h3>'+(o&&orgById[o]?'<span class="o">'+esc(orgById[o])+'</span>':'')+(g?'<span class="g">'+g+'</span>':'')+'</a>';
 }
 
-function related(p,types,orgName,typeById,freeId){
-  var F='_fields=id,link,title,organization,program-type,free-program,kc_prog_fee,kc_prog_freq,kc_prog_ages&per_page=12&exclude='+p.id;
+function related(p,types,orgName,typeById,freeId,all,orgById){
   var o=(p.organization||[])[0], t=types[0];
-  var jobs=[o?getJ('keiki-program?organization='+o+'&'+F).catch(function(){return [];}):Promise.resolve([]),
-            t?getJ('keiki-program?program-type='+t.id+'&'+F).catch(function(){return [];}):Promise.resolve([])];
-  Promise.all(jobs).then(function(res){
-    var orgList=res[0].slice(0,6), seen={}; orgList.forEach(function(x){seen[x.id]=1;});
-    var typeList=res[1].filter(function(x){return !seen[x.id];});
-    var oids={}; orgList.concat(typeList).forEach(function(x){(x.organization||[]).forEach(function(i){oids[i]=1;});});
-    var ids=Object.keys(oids);
-    return (ids.length?getJ('organization?include='+ids.join(',')+'&per_page=100&_fields=id,name').catch(function(){return [];}):Promise.resolve([])).then(function(os){
-      var orgById={}; os.forEach(function(x){orgById[x.id]=dec(x.name);});
+  var others=all.filter(function(x){return x.id!==p.id;});
+  var orgList=o?others.filter(function(x){return (x.organization||[]).indexOf(o)!==-1;}).slice(0,6):[];
+  var seen={}; orgList.forEach(function(x){seen[x.id]=1;});
+  var typeList=t?others.filter(function(x){return !seen[x.id]&&(x['program-type']||[]).indexOf(t.id)!==-1;}):[];
+  (function(){
       /* prefer same-area programs for the "more like this" row */
       var reg=(p['keiki-region']||[])[0];
       typeList.sort(function(a,b){return ((b['keiki-region']||[]).indexOf(reg)!==-1)-((a['keiki-region']||[]).indexOf(reg)!==-1);});
@@ -270,8 +292,7 @@ function related(p,types,orgName,typeById,freeId){
            typeList.map(function(x){return miniCard(x,typeById,freeId,orgById);}).join('')+'</div></section>';
       }
       var box=document.getElementById('kcp-rel'); if(box){box.innerHTML=h;}
-    });
-  }).catch(function(){});
+  })();
 }
 
 function run(){
@@ -281,18 +302,17 @@ function run(){
   var anchor=fig||document.querySelector('.wp-block-post-title')||content;
   if(!anchor){return;}
   var src=parse(content);
-  getJ('keiki-program/'+pid+'?_fields=id,link,title,organization,program-type,keiki-region,free-program,kc_prog_fee,kc_prog_freq,kc_prog_ages,kc_prog_web,kc_prog_desc').then(function(p){
-    var o=(p.organization||[])[0], r=(p['keiki-region']||[])[0];
-    return Promise.all([
-      getJ('program-type?per_page=100&_fields=id,slug,name'),
-      o?getJ('organization/'+o+'?_fields=id,name,link,z_taxonomy_image_url').catch(function(){return null;}):null,
-      r?getJ('keiki-region/'+r+'?_fields=id,name').catch(function(){return null;}):null,
-      getJ('free-program?per_page=100&_fields=id,slug').catch(function(){return [];})
-    ]).then(function(res){
-      var typeById={}; res[0].forEach(function(t){typeById[t.id]=t;});
+  loadAll().then(function(D){
+    var p=null; D.progs.forEach(function(x){if(String(x.id)===String(pid)){p=x;}});
+    /* not in the cached list (e.g. just published): ask for this one program */
+    return (p?Promise.resolve(p):getJ('keiki-program/'+pid+'?_fields=id,link,title,organization,program-type,keiki-region,free-program,kc_prog_fee,kc_prog_freq,kc_prog_ages,kc_prog_web,kc_prog_desc')).then(function(p){
+      var o=(p.organization||[])[0], r=(p['keiki-region']||[])[0];
+      var typeById={}; D.types.forEach(function(t){typeById[t.id]=t;});
+      var orgById={}, orgObj=null; D.orgs.forEach(function(x){orgById[x.id]=dec(x.name); if(x.id===o){orgObj=x;}});
+      var region=null; D.regions.forEach(function(x){if(x.id===r){region=x;}});
       var types=(p['program-type']||[]).map(function(id){return typeById[id];}).filter(Boolean);
-      var freeId=null; (res[3]||[]).forEach(function(t){if(/^(true|yes|free)$/i.test(t.slug)){freeId=t.id;}});
-      var d={p:p,src:src,types:types,org:res[1],region:res[2],freeId:freeId,img:imgEl?(imgEl.currentSrc||imgEl.src):''};
+      var freeId=null; (D.free||[]).forEach(function(t){if(/^(true|yes|free)$/i.test(t.slug)){freeId=t.id;}});
+      var d={p:p,src:src,types:types,org:orgObj,region:region,freeId:freeId,img:imgEl?(imgEl.currentSrc||imgEl.src):''};
       var st=document.createElement('style'); st.id='kcp-css'; st.textContent=CSS; document.head.appendChild(st);
       var wrap=document.createElement('div'); wrap.innerHTML=build(d);
       var root=wrap.firstChild;
@@ -307,7 +327,7 @@ function run(){
         if(w&&w<200){mi.parentNode.style.display='none';}});
         mi.addEventListener('error',function(){mi.parentNode.style.display='none';});}
       document.documentElement.classList.add('kcp-on');
-      related(p,types,d.org?dec(d.org.name):src.aboutName,typeById,freeId);
+      related(p,types,d.org?dec(d.org.name):src.aboutName,typeById,freeId,D.progs,orgById);
     });
   }).catch(function(e){ if(window.console){console.warn('Keiki program page: kept the original layout',e);} })
     .then(function(){var w=document.getElementById('kcp-wait'); if(w){w.remove();}});
